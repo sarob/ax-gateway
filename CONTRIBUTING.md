@@ -46,9 +46,9 @@ local development.
 
 ## Branches
 
-- `dev/staging` is the fast integration branch.
-- `main` is the public release branch.
-- Promotion to `main` should happen through a reviewed PR.
+- `main` is the integration and release branch. Branch all new work from `main`.
+- `dev/staging` is dormant as of 2026-05-07 and far behind `main`. Do not branch
+  from it — PRs cut from `dev/staging` will silently revert recent work.
 
 ## Commit Style
 
@@ -98,11 +98,10 @@ See [docs/release-process.md](docs/release-process.md).
 
 The short version:
 
-1. Land work in `dev/staging`.
-2. Promote `dev/staging` to `main`.
-3. Release Please opens a release PR.
-4. Merge the release PR after reviewing the version and changelog.
-5. GitHub Release publication triggers PyPI publishing.
+1. Branch off `main` and PR against `main`.
+2. Release Please opens a release PR.
+3. Merge the release PR after reviewing the version and changelog.
+4. GitHub Release publication triggers PyPI publishing.
 
 ## Community & Support
 
