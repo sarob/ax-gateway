@@ -15,7 +15,7 @@ send it a task via the aX messaging system, and have it suggest a solution.
 - sarob-bot registered but in ERROR state
 - `.ax/config.toml` configured for gateway `mode = "local"`
 - User PAT in `~/.ax/user.toml` targeting `https://paxai.app`
-- Agent PAT created and saved in `.env.local` as `sarob-bot-agent-token`
+- Agent PAT created and saved in `.env` as `sarob-bot-agent-token`
 
 ## Run auto
 
@@ -31,20 +31,22 @@ send it a task via the aX messaging system, and have it suggest a solution.
 
 ## Work Plan
 
-| # | Step | Status |
-|---|------|--------|
-| 1 | Debug and root-cause all sentinel bootstrap failures (Bugs 1-6) | DONE |
-| 2 | Fix gateway.py — add `HERMES_REPO_PATH` to sentinel env (Bug 5a) | DONE |
-| 3 | Fix hermes_sdk.py — force hermes repo to sys.path[0] + evict stale `tools` (Bug 5b/5c) | DONE |
-| 4 | Restart gateway, verify `tools.registry` import succeeds in live sentinel | DONE |
-| 5 | Test sarob-bot end-to-end — send ping as user, confirm reply | DONE |
-| 6 | Resolve Bug 7 — switch to Anthropic model, set API key | DONE |
-| 7 | Fix Bug 8 — Anthropic base URL doubled `/v1` | DONE |
-| 8 | Have sarob-bot suggest solution for task `80c056cd` | DONE (7171-char solution delivered) |
-| 9 | Update task `80c056cd` with sarob-bot's solution | DONE (summary sent to space) |
-| 10 | Run linter (ruff) and tests — ensure clean before commit | DONE (638/638 pass) |
-| 11 | Commit code fixes on `fix/hermes-sentinel-local-bootstrap` branch | IN PROGRESS |
-| 12 | Create PR targeting `dev/staging`, merge when CI passes | PENDING |
+
+| #   | Step                                                                                   | Status                              |
+| --- | -------------------------------------------------------------------------------------- | ----------------------------------- |
+| 1   | Debug and root-cause all sentinel bootstrap failures (Bugs 1-6)                        | DONE                                |
+| 2   | Fix gateway.py — add `HERMES_REPO_PATH` to sentinel env (Bug 5a)                       | DONE                                |
+| 3   | Fix hermes_sdk.py — force hermes repo to sys.path[0] + evict stale `tools` (Bug 5b/5c) | DONE                                |
+| 4   | Restart gateway, verify `tools.registry` import succeeds in live sentinel              | DONE                                |
+| 5   | Test sarob-bot end-to-end — send ping as user, confirm reply                           | DONE                                |
+| 6   | Resolve Bug 7 — switch to Anthropic model, set API key                                 | DONE                                |
+| 7   | Fix Bug 8 — Anthropic base URL doubled `/v1`                                           | DONE                                |
+| 8   | Have sarob-bot suggest solution for task `80c056cd`                                    | DONE (7171-char solution delivered) |
+| 9   | Update task `80c056cd` with sarob-bot's solution                                       | DONE (summary sent to space)        |
+| 10  | Run linter (ruff) and tests — ensure clean before commit                               | DONE (638/638 pass)                 |
+| 11  | Commit code fixes on `fix/hermes-sentinel-local-bootstrap` branch                      | IN PROGRESS                         |
+| 12  | Create PR targeting `dev/staging`, merge when CI passes                                | PENDING                             |
+
 
 ---
 
@@ -112,8 +114,7 @@ top-level key in `.ax/config.toml`. The space ID was found from the
 ## Bug 3: Hermes Checkout Not Found
 
 **Symptom:** `ax gateway status` shows alert:
-`Hermes checkout not found at hermes-agent. Set HERMES_REPO_PATH or clone
-hermes-agent to ~/hermes-agent.`
+`Hermes checkout not found at hermes-agent. Set HERMES_REPO_PATH or clone hermes-agent to ~/hermes-agent.`
 
 **Root cause:** sarob-bot uses template `hermes` / runtime `hermes_sentinel`.
 The Hermes sentinel requires a local clone of
@@ -191,9 +192,9 @@ ModuleNotFoundError: No module named 'tools.registry'
 **Root cause:** sys.path ordering conflict between two `tools` packages:
 
 1. **Bundled sentinel shim** at `ax_cli/runtimes/hermes/tools/__init__.py` —
-   added to sys.path at sentinel.py:612 (`sys.path.insert(0, agents_dir)`)
+  added to sys.path at sentinel.py:612 (`sys.path.insert(0, agents_dir)`)
 2. **hermes-agent repo** `tools/` directory (contains `registry.py`) —
-   added later by `_ensure_hermes_importable()` at hermes_sdk.py:218
+  added later by `_ensure_hermes_importable()` at hermes_sdk.py:218
 
 Even though the hermes repo is prepended at position 0 in sys.path
 (so it comes before the bundled dir), Python's module import system caches
@@ -389,15 +390,17 @@ path is `/v1/messages`, so the resulting URL was
 
 ## Config Changes Summary
 
-| File | Change | Reason |
-|------|--------|--------|
-| `.ax/config.toml` | Replaced gateway-brokered config with direct agent PAT config (top-level keys: token, base_url, agent_name, agent_id, space_id) | `/local/*` routes returning 404; agent_id needed for PAT exchange |
-| `~/.ax/gateway/registry.json` | Set `hermes_python` to `/Users/seanroberts/.pyenv/versions/3.12.7/bin/python3.12` | System python3 is 3.9.6, sentinel needs 3.10+ |
-| `~/hermes-agent` | Created symlink → `~/repositories/hermes-agent` | Gateway expects hermes checkout at `~/hermes-agent` |
-| `ax_cli/gateway.py` | Added `HERMES_REPO_PATH` to `_build_hermes_sentinel_env()` env dict | Sentinel didn't know where hermes-agent was cloned |
-| `ax_cli/runtimes/hermes/runtimes/hermes_sdk.py` | Force hermes repo to sys.path[0] + evict stale `tools` module cache in `_ensure_hermes_importable()` | Import collision between bundled shim and hermes-agent's tools |
-| `ax_cli/runtimes/hermes/runtimes/hermes_sdk.py` | Fix Anthropic base URL: remove trailing `/v1` | Doubled `/v1` caused 404 from Anthropic API |
-| `~/.ax/gateway/registry.json` | Set `hermes_model` to `anthropic:claude-haiku-4-5-20251001` | Codex model had no API key; switched to Anthropic |
+
+| File                                            | Change                                                                                                                          | Reason                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `.ax/config.toml`                               | Replaced gateway-brokered config with direct agent PAT config (top-level keys: token, base_url, agent_name, agent_id, space_id) | `/local/`* routes returning 404; agent_id needed for PAT exchange |
+| `~/.ax/gateway/registry.json`                   | Set `hermes_python` to `/Users/seanroberts/.pyenv/versions/3.12.7/bin/python3.12`                                               | System python3 is 3.9.6, sentinel needs 3.10+                     |
+| `~/hermes-agent`                                | Created symlink → `~/repositories/hermes-agent`                                                                                 | Gateway expects hermes checkout at `~/hermes-agent`               |
+| `ax_cli/gateway.py`                             | Added `HERMES_REPO_PATH` to `_build_hermes_sentinel_env()` env dict                                                             | Sentinel didn't know where hermes-agent was cloned                |
+| `ax_cli/runtimes/hermes/runtimes/hermes_sdk.py` | Force hermes repo to sys.path[0] + evict stale `tools` module cache in `_ensure_hermes_importable()`                            | Import collision between bundled shim and hermes-agent's tools    |
+| `ax_cli/runtimes/hermes/runtimes/hermes_sdk.py` | Fix Anthropic base URL: remove trailing `/v1`                                                                                   | Doubled `/v1` caused 404 from Anthropic API                       |
+| `~/.ax/gateway/registry.json`                   | Set `hermes_model` to `anthropic:claude-haiku-4-5-20251001`                                                                     | Codex model had no API key; switched to Anthropic                 |
+
 
 ## Security Note
 
@@ -442,54 +445,182 @@ to sys.path[0] and evict stale `tools` module cache entries.
 - Sentinel connected to SSE, listening for @sarob-bot mentions
 - All code fixes applied (gateway.py + hermes_sdk.py), gateway restarted
 - **End-to-end verified**: sarob-bot received ping, replied "Pong!", then
-  processed a complex task prompt (7171-char solution in 26s)
+processed a complex task prompt (7171-char solution in 26s)
 - Model: `anthropic:claude-haiku-4-5-20251001` via Anthropic API
 
 ## Reproducing This Setup
 
+### Key identifiers
+
+| Item | Value |
+| --- | --- |
+| Agent name | `sarob-bot` |
+| Agent ID | `2f33cdce-12be-414b-9a0e-2d4d52630a18` |
+| Space ID | `0478b063-4100-497d-bbea-2327bea48bc4` |
+| User (operator) | `sarob` (`93f84b01-4e18-41c9-a6ca-fe8767d06ba9`) |
+| Base URL | `https://paxai.app` |
+| Gateway-managed agent token | `~/.ax/gateway/agents/sarob-bot/token` |
+| User PAT | `~/.ax/user.toml` (field: `token`) |
+| Anthropic API key | `.env` (field: `anthropic-ax-gateway-development-api-key`) |
+| Model | `anthropic:claude-haiku-4-5-20251001` |
+
 ### Prerequisites
 
-1. Clone hermes-agent: `git clone https://github.com/NousResearch/hermes-agent ~/repositories/hermes-agent`
-2. Symlink: `ln -s ~/repositories/hermes-agent ~/hermes-agent`
-3. Create agent PAT via paxai.app, save to `.env.local`
-4. Configure `.ax/config.toml` with top-level keys: token, base_url, agent_name, agent_id, space_id
-5. Update registry `hermes_python` to point at Python 3.10+ if system python is older
-6. Apply gateway.py fix (add `HERMES_REPO_PATH` to sentinel env)
-7. Apply hermes_sdk.py fix (force hermes repo to sys.path[0] + module cache eviction)
-8. Apply hermes_sdk.py fix (remove `/v1` from Anthropic default base URL)
+1. Clone hermes-agent:
+
+   ```bash
+   git clone https://github.com/NousResearch/hermes-agent ~/repositories/hermes-agent
+   ln -s ~/repositories/hermes-agent ~/hermes-agent
+   ```
+
+2. Ensure Python 3.10+ is available. If system `python3` is older (e.g. 3.9
+   from Xcode), install via pyenv and update the registry:
+
+   ```bash
+   pyenv install 3.12.7
+   python3 -c "
+   import json, os
+   reg_path = os.path.expanduser('~/.ax/gateway/registry.json')
+   with open(reg_path) as f:
+       reg = json.load(f)
+   for a in reg['agents']:
+       if a['name'] == 'sarob-bot':
+           a['hermes_python'] = os.path.expanduser('~/.pyenv/versions/3.12.7/bin/python3.12')
+           a['hermes_model'] = 'anthropic:claude-haiku-4-5-20251001'
+   with open(reg_path, 'w') as f:
+       json.dump(reg, f, indent=2)
+   "
+   ```
+
+3. Create `.env` (gitignored) to store credentials locally:
+
+   ```text
+   ax-platform-user-token=axp_u_...
+   sarob-bot-agent-token=axp_a_...
+   anthropic-ax-gateway-development-api-key=sk-ant-api03-...
+   ```
+
+   Create the agent PAT at [paxai.app](https://paxai.app) or via
+   `ax token mint sarob-bot --create`. The user PAT comes from
+   `ax login`. The Anthropic key is a standard API key from
+   [console.anthropic.com](https://console.anthropic.com).
+
+4. Configure `.ax/config.toml` for the agent runtime. The CLI supports
+   `token_file` to avoid putting secrets inline — it reads a plain text file
+   containing just the token:
+
+   ```toml
+   token_file = "~/.ax/gateway/agents/sarob-bot/token"
+   base_url = "https://paxai.app"
+   agent_name = "sarob-bot"
+   agent_id = "2f33cdce-12be-414b-9a0e-2d4d52630a18"
+   space_id = "0478b063-4100-497d-bbea-2327bea48bc4"
+   ```
+
+   The token file is a single line containing the agent PAT — no key=value
+   format, just the raw token:
+
+   ```text
+   axp_a_RbtjwOSeN0...
+   ```
+
+   The gateway creates this file automatically at
+   `~/.ax/gateway/agents/sarob-bot/token` when the agent is registered.
+
+   All keys must be top-level — nesting under `[agent]` does not work for
+   direct API mode.
+
+   **User-identity commands:** The project `.ax/config.toml` configures the
+   agent identity. Commands that must run as the user (e.g. sending messages
+   to the agent) need env var overrides to swap the token and clear the agent
+   identity. These commands use `AX_TOKEN=... AX_AGENT_NAME="" AX_AGENT_ID=""`
+   with the user PAT from `~/.ax/user.toml` — shown in full below.
+
+5. Apply the three source fixes (gateway.py + hermes_sdk.py) from this branch,
+   or confirm the PR has been merged.
 
 ### Starting the Gateway
 
-1. Set `ANTHROPIC_API_KEY` (or the appropriate provider key) in the shell
-2. `ax gateway stop && ax gateway start`
-3. Verify: `ax gateway status` shows 0 alerts, agent IDLE
-4. If approval is pending (model/runtime change): `ax gateway approvals list`,
-   then `ax gateway approvals approve <approval-id>`
+1. Export the Anthropic API key and start the gateway:
 
-### Connecting to the Space
+   ```bash
+   export ANTHROPIC_API_KEY="$(awk -F= '/^anthropic-ax-gateway/{print $2}' .env)"
+   ax gateway stop && ax gateway start
+   ```
 
-1. Confirm the agent is connected to the correct space:
+   Expected:
+
+   ```text
+   ax gateway start
+     daemon    = started
+     daemon_pid= 96636
+     ui        = started
+     ui_pid    = 96672
+     url       = http://127.0.0.1:8765
+   ```
+
+2. Verify 0 alerts and sarob-bot is IDLE:
 
    ```bash
    ax gateway status
-   # Check: space_id matches, agent shows LIVE/IDLE, connected = True
    ```
 
-2. Send messages as your **user identity** (not the agent identity) to
-   avoid the self-mention filter. Override env vars to ensure user auth:
+   Expected: `alerts = 0`, sarob-bot row shows `LIVE / IDLE / connected`.
+
+3. If approval is pending after a model or runtime change:
 
    ```bash
-   AX_TOKEN="<user-pat>" AX_BASE_URL="https://paxai.app" \
+   ax gateway approvals list
+   ax gateway approvals approve <approval-id>
+   ```
+
+   Expected: `Approved: <approval-id>` — gateway restarts the sentinel
+   automatically within a few seconds.
+
+### Connecting to the Space
+
+1. Confirm sarob-bot is connected and listening:
+
+   ```bash
+   ax gateway status
+   ```
+
+   Expected: `agents = 1`, `live = 1`, sarob-bot shows
+   `Presence: IDLE`, `Connected: True`, `Space: 0478b063...`.
+
+2. Send a test ping as your **user identity** (not the agent) to avoid
+   the self-mention filter. This reads the user PAT from `~/.ax/user.toml`:
+
+   ```bash
+   AX_TOKEN="$(awk -F'"' '/^token/{print $2}' ~/.ax/user.toml)" \
      AX_AGENT_NAME="" AX_AGENT_ID="" \
-     AX_SPACE_ID="<space-id>" \
      ax send "@sarob-bot ping" --timeout 120
    ```
 
-3. Verify the sentinel log shows the message was received and processed:
+   Expected (after ~10-15 seconds):
+
+   ```text
+   Sent. id=8d6da52b-... as sarob
+     waiting for reply...
+   aX: Working…
+
+   @sarob-bot: Pong! 👋 I'm here and ready to help. What can I do for you?
+   ```
+
+3. Verify the sentinel log shows the full processing cycle:
 
    ```bash
-   cat gateway-hermes-sentinel.log | tail -20
-   # Look for: "Queued mention", "PROCESSING", "Response complete"
+   tail -10 gateway-hermes-sentinel.log
+   ```
+
+   Expected:
+
+   ```text
+   [INFO] Queued mention from @sarob (queue depth: 1)
+   [INFO] PROCESSING from @sarob (queue depth: 0): ping
+   [INFO] hermes_sdk: provider=anthropic model=claude-haiku-4-5-20251001 key=sk-ant-a...
+   [INFO] hermes_sdk: done in 4s, 0 tools, 1 api_calls, 10358 tokens, 58 chars
+   [INFO] Response complete (58 chars)
    ```
 
 ### Finding a Task
@@ -497,43 +628,77 @@ to sys.path[0] and evict stale `tools` module cache entries.
 1. List tasks in the space:
 
    ```bash
-   AX_TOKEN="<user-pat>" AX_BASE_URL="https://paxai.app" \
+   AX_TOKEN="$(awk -F'"' '/^token/{print $2}' ~/.ax/user.toml)" \
      AX_AGENT_NAME="" AX_AGENT_ID="" \
-     AX_SPACE_ID="<space-id>" \
      ax tasks list --json
    ```
 
-2. Get details for a specific task:
+   Expected:
+
+   ```json
+   [
+     {
+       "id": "80c056cd-7458-4702-bff7-c6df8fecbb80",
+       "title": "Define shared workspace operating model for team agents",
+       "status": "in-progress",
+       "priority": "high",
+       "space_slug": "ax-gateway"
+     }
+   ]
+   ```
+
+2. Get full details for a specific task:
 
    ```bash
-   ax tasks get <task-id> --json
+   AX_TOKEN="$(awk -F'"' '/^token/{print $2}' ~/.ax/user.toml)" \
+     AX_AGENT_NAME="" AX_AGENT_ID="" \
+     ax tasks get 80c056cd-7458-4702-bff7-c6df8fecbb80 --json
    ```
+
+   Expected: full task JSON including description with the four key decision
+   areas (deployment model, isolation, credentials, operational patterns).
 
 ### Having the Agent Respond to a Task
 
-1. Send the task details to the agent as a user message:
+1. Send the task prompt to sarob-bot:
 
    ```bash
-   AX_TOKEN="<user-pat>" AX_BASE_URL="https://paxai.app" \
+   AX_TOKEN="$(awk -F'"' '/^token/{print $2}' ~/.ax/user.toml)" \
      AX_AGENT_NAME="" AX_AGENT_ID="" \
-     AX_SPACE_ID="<space-id>" \
-     ax send "@sarob-bot <task description and prompt>" --timeout 180 --skip-ax
+     ax send "@sarob-bot We have a task: 'Define shared workspace \
+     operating model for team agents'. Please suggest a concrete solution \
+     covering: deployment model, isolation & security, credential management, \
+     and operational patterns." --timeout 180 --skip-ax
    ```
 
-   Use `--skip-ax` to send without waiting for a reply inline (the reply
-   arrives asynchronously via the sentinel's SSE connection).
+   Expected:
+
+   ```text
+   Sent. id=a60933de-... as sarob
+   ```
+
+   Use `--skip-ax` to fire-and-forget. The reply arrives asynchronously
+   via the sentinel's SSE connection (~20-30 seconds for a detailed response).
 
 2. Check the agent's reply:
 
    ```bash
-   AX_TOKEN="<user-pat>" AX_BASE_URL="https://paxai.app" \
+   AX_TOKEN="$(awk -F'"' '/^token/{print $2}' ~/.ax/user.toml)" \
      AX_AGENT_NAME="" AX_AGENT_ID="" \
-     AX_SPACE_ID="<space-id>" \
      ax messages list --limit 5 --json
    ```
 
-3. Update the task status if needed:
+   Expected: most recent message from `sarob-bot` with a multi-section
+   solution (typically 5000-7000 chars covering all four areas, plus an
+   implementation timeline and risk table).
+
+3. Update the task status when the solution is accepted:
 
    ```bash
-   ax tasks update <task-id> --status done
+   AX_TOKEN="$(awk -F'"' '/^token/{print $2}' ~/.ax/user.toml)" \
+     AX_AGENT_NAME="" AX_AGENT_ID="" \
+     ax tasks update 80c056cd-7458-4702-bff7-c6df8fecbb80 --status done
    ```
+
+   Expected: task status changes to `done`.
+
