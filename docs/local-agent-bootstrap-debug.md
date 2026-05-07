@@ -44,8 +44,8 @@ send it a task via the aX messaging system, and have it suggest a solution.
 | 8   | Have sarob-bot suggest solution for task `80c056cd`                                    | DONE (7171-char solution delivered) |
 | 9   | Update task `80c056cd` with sarob-bot's solution                                       | DONE (summary sent to space)        |
 | 10  | Run linter (ruff) and tests — ensure clean before commit                               | DONE (638/638 pass)                 |
-| 11  | Commit code fixes on `fix/hermes-sentinel-local-bootstrap` branch                      | IN PROGRESS                         |
-| 12  | Create PR targeting `dev/staging`, merge when CI passes                                | PENDING                             |
+| 11  | Commit code fixes on `fix/hermes-sentinel-local-bootstrap` branch                      | DONE (66225a5 + 439ca30)            |
+| 12  | Create PR targeting `dev/staging`, merge when CI passes                                | DONE (sarob/ax-gateway#1)           |
 
 
 ---
