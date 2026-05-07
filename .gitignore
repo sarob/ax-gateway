@@ -19,3 +19,4 @@ gateway-hermes-sentinel.log
 
 # Claude Code
 .claude/
+.env.local
