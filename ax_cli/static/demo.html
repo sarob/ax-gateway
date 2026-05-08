@@ -1122,6 +1122,28 @@
       }
     }
 
+    async function markManuallyAttached(agent, button) {
+      if (!agent || !agent.name) return;
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Marking…";
+      }
+      try {
+        await api("POST", "/api/agents/" + encodeURIComponent(agent.name) + "/manual-attach", {
+          note: "Operator confirmed this attached session is already running.",
+        });
+        showToast("Marked @" + agent.name + " active", "ok");
+        await loadStatus();
+        await loadAgentDetail(agent.name);
+      } catch (err) {
+        showToast(err.message || "Manual attach failed", "err");
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Mark attached";
+        }
+      }
+    }
+
     function ensureListMode() {
       if (state.lastRenderMode === "list") return;
       state.lastRenderMode = "list";
@@ -2281,6 +2303,12 @@
       const desiredRunning = String(agent.desired_state || "").toLowerCase() !== "stopped";
       const needsApproval = String(agent.approval_state || "").toLowerCase() === "pending" && agent.approval_id;
       const sendLock = sendAvailability(agent);
+      const attachedNeedsOperator =
+        isAttachedRuntime(agent) &&
+        !agent.connected &&
+        (String(agent.presence || "").toUpperCase() === "STALE" ||
+          String(agent.presence || "").toUpperCase() === "OFFLINE" ||
+          String(agent.reachability || "").toLowerCase() === "attach_required");
       const actions = makeEl("div", { class: "drawer-actions" });
       if (needsApproval) {
         actions.appendChild(makeEl("div", { class: "approval-actions" }, [
@@ -2346,12 +2374,17 @@
         makeEl("div", { class: "message-composer-actions" }, [sendButton, resetButton]),
       ]));
       if (desiredRunning) {
-        if (isAttachedRuntime(agent) && String(agent.presence || "").toUpperCase() === "STALE") {
+        if (attachedNeedsOperator) {
           const startButton = makeEl("button", {
             class: "btn btn-primary",
             onclick: (event) => attachAgent(agent, event.currentTarget),
           }, ["Start"]);
-          actions.appendChild(makeEl("div", { class: "message-composer-actions" }, [startButton]));
+          const manualButton = makeEl("button", {
+            class: "btn btn-ghost",
+            title: "Use this when the Claude Code session is already attached outside Gateway.",
+            onclick: (event) => markManuallyAttached(agent, event.currentTarget),
+          }, ["Mark attached"]);
+          actions.appendChild(makeEl("div", { class: "message-composer-actions" }, [startButton, manualButton]));
         } else {
           actions.appendChild(makeEl("button", {
             class: "btn btn-ghost",
