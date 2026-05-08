@@ -78,6 +78,7 @@ from ..gateway import (
     load_gateway_registry,
     load_gateway_session,
     load_recent_gateway_activity,
+    load_space_cache,
     looks_like_space_uuid,
     ollama_setup_status,
     record_gateway_activity,
@@ -85,9 +86,12 @@ from ..gateway import (
     save_agent_pending_messages,
     save_gateway_registry,
     save_gateway_session,
+    save_space_cache,
+    space_name_from_cache,
     ui_log_path,
     ui_status,
     upsert_agent_entry,
+    upsert_space_cache_entry,
     verify_local_session_token,
     write_gateway_ui_state,
 )
@@ -822,13 +826,34 @@ def _space_list_from_response(raw: object) -> list[dict]:
 
 
 def _space_name_for_id(client: AxClient, space_id: str) -> str | None:
+    """Friendly-name lookup with persistent-cache short-circuit.
+
+    Hits the local space cache first so we don't pay an upstream `list_spaces`
+    call (and risk a 429) for a name we already know. Only falls through to
+    upstream when the cache has no entry for this id, and refreshes the cache
+    on a successful fetch so future calls stay in-process.
+    """
+    cached = space_name_from_cache(space_id)
+    if cached:
+        return cached
     try:
-        for item in _space_list_from_response(client.list_spaces()):
-            if auth_cmd._candidate_space_id(item) == space_id:
-                return str(item.get("name") or item.get("slug") or space_id)
+        rows = _space_list_from_response(client.list_spaces())
     except Exception:
         return None
-    return None
+    refreshed: list[dict] = []
+    match: str | None = None
+    for item in rows:
+        sid = auth_cmd._candidate_space_id(item)
+        if not sid:
+            continue
+        name = str(item.get("name") or item.get("slug") or sid)
+        slug = str(item.get("slug") or "").strip() or None
+        refreshed.append({"id": sid, "name": name, "slug": slug})
+        if sid == space_id:
+            match = name
+    if refreshed:
+        save_space_cache(refreshed)
+    return match
 
 
 def _resolve_gateway_agent_home_space(
@@ -3409,28 +3434,14 @@ def _render_gateway_dashboard(payload: dict) -> Group:
     )
 
 
-def _spaces_cache_path() -> Path:
-    return gateway_dir() / "spaces.cache.json"
-
-
-def _load_spaces_cache() -> list[dict]:
-    try:
-        raw = json.loads(_spaces_cache_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    items = raw.get("spaces") if isinstance(raw, dict) else raw
-    return [item for item in (items or []) if isinstance(item, dict)]
-
-
-def _save_spaces_cache(spaces: list[dict]) -> None:
-    payload = {"spaces": spaces, "saved_at": datetime.now(timezone.utc).isoformat()}
-    try:
-        _spaces_cache_path().write_text(json.dumps(payload), encoding="utf-8")
-    except OSError:
-        pass
-
-
 def _normalize_spaces_response(items: list) -> list[dict]:
+    """Normalize an upstream `list_spaces` response into [{id, name, slug}].
+
+    If a row arrives with an empty/missing name (we've seen this happen for
+    brand-new spaces), fall back to the local cache before defaulting to the
+    UUID — avoids the "raw UUID rendered in picker" symptom for any space the
+    operator has seen at least once.
+    """
     spaces: list[dict] = []
     for item in items or []:
         if not isinstance(item, dict):
@@ -3438,10 +3449,12 @@ def _normalize_spaces_response(items: list) -> list[dict]:
         space_id = str(item.get("id") or item.get("space_id") or "").strip()
         if not space_id:
             continue
+        upstream_name = str(item.get("name") or item.get("space_name") or "").strip()
+        cached_name = space_name_from_cache(space_id) if not upstream_name else None
         spaces.append(
             {
                 "id": space_id,
-                "name": str(item.get("name") or item.get("space_name") or space_id),
+                "name": upstream_name or cached_name or space_id,
                 "slug": str(item.get("slug") or "").strip() or None,
             }
         )
@@ -3468,10 +3481,10 @@ def _spaces_payload() -> dict:
         items = raw.get("spaces", raw) if isinstance(raw, dict) else raw
         spaces = _normalize_spaces_response(items or [])
         if spaces:
-            _save_spaces_cache(spaces)
+            save_space_cache(spaces)
     except Exception as exc:  # noqa: BLE001 — upstream errors are routine here
         error = str(exc)
-        spaces = _load_spaces_cache()
+        spaces = load_space_cache()
         cached = bool(spaces)
 
     if active_space_id and not any(s["id"] == active_space_id for s in spaces):
@@ -5914,11 +5927,9 @@ def use_gateway_space(
     session["space_id"] = sid
     session["space_name"] = space_name
     path = save_gateway_session(session)
-    registry = load_gateway_registry()
-    registry.setdefault("gateway", {})
-    registry["gateway"]["space_id"] = sid
-    registry["gateway"]["space_name"] = space_name
-    save_gateway_registry(registry)
+    # Persist the resolved id/name into the spaces cache so subsequent slug
+    # switches stay cache-served and stop hammering list_spaces.
+    upsert_space_cache_entry(sid, name=space_name, slug=None)
     record_gateway_activity("gateway_space_use", space_id=sid, space_name=space_name)
     result = {
         "session_path": str(path),

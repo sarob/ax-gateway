@@ -4916,11 +4916,13 @@ def test_gateway_status_payload_surfaces_alerts(monkeypatch, tmp_path):
 
 def test_gateway_spaces_use_resolves_slug_and_updates_session(monkeypatch, tmp_path):
     monkeypatch.setenv("AX_CONFIG_DIR", str(tmp_path / "config"))
+    private_uuid = "11111111-2222-3333-4444-555555555555"
+    team_uuid = "66666666-7777-8888-9999-aaaaaaaaaaaa"
     gateway_core.save_gateway_session(
         {
             "token": "axp_u_test.token",
             "base_url": "https://paxai.app",
-            "space_id": "private-space",
+            "space_id": private_uuid,
             "space_name": "madtank-workspace",
             "username": "codex",
         }
@@ -4930,8 +4932,8 @@ def test_gateway_spaces_use_resolves_slug_and_updates_session(monkeypatch, tmp_p
         def list_spaces(self):
             return {
                 "spaces": [
-                    {"id": "private-space", "slug": "madtank-workspace", "name": "madtank's Workspace"},
-                    {"id": "team-space", "slug": "ax-cli-dev", "name": "aX CLI Dev"},
+                    {"id": private_uuid, "slug": "madtank-workspace", "name": "madtank's Workspace"},
+                    {"id": team_uuid, "slug": "ax-cli-dev", "name": "aX CLI Dev"},
                 ]
             }
 
@@ -4941,14 +4943,21 @@ def test_gateway_spaces_use_resolves_slug_and_updates_session(monkeypatch, tmp_p
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["space_id"] == "team-space"
+    assert payload["space_id"] == team_uuid
     assert payload["space_name"] == "aX CLI Dev"
     session = gateway_core.load_gateway_session()
-    assert session["space_id"] == "team-space"
+    assert session["space_id"] == team_uuid
     assert session["space_name"] == "aX CLI Dev"
+    # Active space lives only in session.json — registry.gateway must NOT
+    # carry a duplicate copy (post-simplification: single source of truth).
     registry = gateway_core.load_gateway_registry()
-    assert registry["gateway"]["space_id"] == "team-space"
-    assert registry["gateway"]["space_name"] == "aX CLI Dev"
+    assert "space_id" not in registry["gateway"]
+    assert "space_name" not in registry["gateway"]
+    # Resolved id/name should be persisted to the spaces cache so a subsequent
+    # slug switch can short-circuit list_spaces.
+    cached = gateway_core.load_space_cache()
+    cached_ids = {row.get("id") for row in cached}
+    assert team_uuid in cached_ids
 
 
 def test_gateway_spaces_current_shows_session_space(monkeypatch, tmp_path):
@@ -6787,3 +6796,174 @@ def test_gateway_spaces_list_command_renders_table(monkeypatch, tmp_path):
     payload = json.loads(result.output)
     assert payload["active_space_id"] == _GOOD_SPACE_UUID
     assert payload["spaces"][0]["id"] == _GOOD_SPACE_UUID
+
+
+# -- Active-space simplification (single source of truth) ---------------------
+
+
+def test_load_gateway_registry_strips_legacy_gateway_space_keys(monkeypatch, tmp_path):
+    """Legacy registries with space_id/space_name in the gateway block must be
+    auto-migrated on load: session.json owns active space, registry.gateway
+    never carries a duplicate."""
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    legacy = {
+        "version": 1,
+        "gateway": {
+            "gateway_id": "gw-test",
+            "space_id": _GOOD_SPACE_UUID,
+            "space_name": "madtank's Workspace",
+            "session_connected": True,
+        },
+        "agents": [],
+        "bindings": [],
+        "identity_bindings": [],
+        "approvals": [],
+    }
+    gateway_core.registry_path().parent.mkdir(parents=True, exist_ok=True)
+    gateway_core.registry_path().write_text(json.dumps(legacy), encoding="utf-8")
+
+    loaded = gateway_core.load_gateway_registry()
+    assert "space_id" not in loaded["gateway"]
+    assert "space_name" not in loaded["gateway"]
+    # Gateway-specific metadata must be preserved.
+    assert loaded["gateway"]["gateway_id"] == "gw-test"
+    assert loaded["gateway"]["session_connected"] is True
+
+
+def test_status_payload_active_space_sourced_from_session_only(monkeypatch, tmp_path):
+    """Top-level status.space_id/space_name must come from session.json. The
+    nested gateway block must not carry duplicate space_id/space_name even if
+    callers pass the registry through it (the load-time strip enforces this)."""
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_gateway_session(
+        {
+            "token": "axp_u_test.token",
+            "base_url": "https://paxai.app",
+            "space_id": _GOOD_SPACE_UUID,
+            "space_name": "madtank's Workspace",
+            "username": "madtank",
+        }
+    )
+    legacy = {
+        "version": 1,
+        "gateway": {
+            "gateway_id": "gw-test",
+            "space_id": "some-other-space",
+            "space_name": "Wrong Workspace",
+            "session_connected": True,
+            "desired_state": "running",
+            "effective_state": "running",
+        },
+        "agents": [],
+        "bindings": [],
+        "identity_bindings": [],
+        "approvals": [],
+    }
+    gateway_core.registry_path().write_text(json.dumps(legacy), encoding="utf-8")
+
+    payload = gateway_cmd._status_payload(activity_limit=1)
+
+    assert payload["space_id"] == _GOOD_SPACE_UUID
+    assert payload["space_name"] == "madtank's Workspace"
+    assert "space_id" not in payload["gateway"]
+    assert "space_name" not in payload["gateway"]
+
+
+def test_resolve_space_ref_uses_cache_when_upstream_429(monkeypatch, tmp_path):
+    """A slug we have ever resolved before must be re-resolvable from the
+    spaces cache without going upstream — so transient 429s on list_spaces
+    don't break `gateway spaces use <slug>`."""
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    team_uuid = "78950af5-4d27-441b-9296-ec46de8ba35d"
+    gateway_core.save_space_cache([
+        {"id": _GOOD_SPACE_UUID, "name": "madtank's Workspace", "slug": "madtank-workspace"},
+        {"id": team_uuid, "name": "aX CLI Dev", "slug": "ax-cli-dev"},
+    ])
+
+    class Boom:
+        def list_spaces(self):
+            raise AssertionError("upstream must NOT be called when the cache has the slug")
+
+    from ax_cli.config import _resolve_space_ref
+    resolved = _resolve_space_ref(Boom(), "ax-cli-dev", source="explicit")
+    assert resolved == team_uuid
+
+
+def test_normalize_spaces_response_hydrates_name_from_cache(monkeypatch, tmp_path):
+    """If upstream returns a row with a missing/empty name, the UI must
+    surface the cached friendly name for previously-seen spaces instead of
+    falling back to the raw UUID."""
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_space_cache([
+        {"id": _GOOD_SPACE_UUID, "name": "madtank's Workspace", "slug": "madtank"},
+    ])
+
+    upstream_partial = [
+        {"id": _GOOD_SPACE_UUID, "name": "", "slug": "madtank"},
+    ]
+    rows = gateway_cmd._normalize_spaces_response(upstream_partial)
+    assert rows[0]["name"] == "madtank's Workspace"
+
+
+def test_runtime_reconcile_skips_phantom_rebinding_after_corruption_repair(monkeypatch, tmp_path):
+    """The reconcile_corrupt_space_ids band-aid repairs entry.space_id from a
+    leaked name to a UUID. The daemon's reconcile() must NOT emit a fake
+    runtime_rebinding event for that purely-cosmetic change."""
+    captured: list[dict] = []
+
+    def fake_record(event, **kwargs):
+        captured.append({"event": event, **kwargs})
+
+    monkeypatch.setattr(gateway_core, "record_gateway_activity", fake_record)
+
+    class FakeRuntime:
+        def __init__(self, entry):
+            self.entry = dict(entry)
+            self._stopped = False
+
+        def stop(self):
+            self._stopped = True
+
+        def start(self):
+            pass
+
+    daemon = gateway_core.GatewayDaemon.__new__(gateway_core.GatewayDaemon)
+    daemon._runtimes = {}
+    daemon.client_factory = lambda: object()
+    daemon.logger = None
+    runtime = FakeRuntime({
+        "name": "agent-x",
+        "agent_id": "00000000-1111-2222-3333-444444444444",
+        "space_id": "madtank's Workspace",  # legacy non-UUID corruption
+        "base_url": "https://paxai.app",
+        "token_file": "/tmp/agent-token",
+        "runtime_type": "inbox",
+    })
+    daemon._runtimes["agent-x"] = runtime
+    repaired_entry = {
+        "name": "agent-x",
+        "agent_id": "00000000-1111-2222-3333-444444444444",
+        "space_id": _GOOD_SPACE_UUID,  # repaired by reconcile_corrupt_space_ids
+        "base_url": "https://paxai.app",
+        "token_file": "/tmp/agent-token",
+        "runtime_type": "inbox",
+        "desired_state": "running",
+        "approval_state": "approved",
+        "attestation_state": "verified",
+        "identity_status": "verified",
+        "environment_status": "environment_allowed",
+        "space_status": "active_in_space",
+    }
+
+    daemon._reconcile_runtime(repaired_entry)
+
+    rebindings = [c for c in captured if c["event"] == "runtime_rebinding"]
+    assert rebindings == [], (
+        "reconcile() emitted a phantom runtime_rebinding when the only change "
+        "was a non-UUID -> UUID space_id repair"
+    )
+    assert runtime.entry["space_id"] == _GOOD_SPACE_UUID
