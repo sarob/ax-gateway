@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 DEMO_HTML = Path(__file__).resolve().parents[1] / "ax_cli" / "static" / "demo.html"
 
 
