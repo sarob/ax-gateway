@@ -9,6 +9,18 @@ This project is governed by our [Code of Conduct](./CODE_OF_CONDUCT.md). By
 participating, you are expected to uphold it. Report unacceptable behavior to
 **support@ax-platform.com**.
 
+## New Here?
+
+If you are joining the project for the first time, start with these docs in
+order:
+
+1. **[Quickstart](docs/quickstart.md)** — install, run Gateway, send a message
+   (~10 minutes)
+2. **[Training Index](docs/devrel-teaching-operators-contributors.md)** —
+   glossary, concept pages, scenario guides, and a suggested reading order
+3. **[Good First Issues](https://github.com/ax-platform/ax-gateway/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)** —
+   small, well-scoped tasks tagged for newcomers
+
 ## Getting Started
 
 ### Prerequisites
