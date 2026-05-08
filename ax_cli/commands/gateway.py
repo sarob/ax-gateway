@@ -584,6 +584,10 @@ def _send_local_session_message(*, session_token: str, body: dict) -> dict:
     metadata = (
         merge_explicit_mentions_metadata(metadata, content, exclude=[sender_name] if sender_name else ()) or metadata
     )
+    raw_attachments = body.get("attachments")
+    attachments_payload: list[dict] | None = None
+    if isinstance(raw_attachments, list) and raw_attachments:
+        attachments_payload = [a for a in raw_attachments if isinstance(a, dict)]
     payload = client.send_message(
         space_id,
         content,
@@ -592,8 +596,14 @@ def _send_local_session_message(*, session_token: str, body: dict) -> dict:
         parent_id=parent_id or None,
         metadata=metadata,
         message_type=str(body.get("message_type") or "text"),
+        attachments=attachments_payload,
     )
-    record_gateway_activity("local_message_sent", entry=entry, message_id=(payload.get("message") or {}).get("id"))
+    record_gateway_activity(
+        "local_message_sent",
+        entry=entry,
+        message_id=(payload.get("message") or {}).get("id"),
+        attachment_count=len(attachments_payload or []),
+    )
     return {"agent": entry.get("name"), "message": payload, "session": session}
 
 
@@ -656,6 +666,12 @@ _LOCAL_PROXY_METHODS: dict[str, dict] = {
     "list_tasks": {"kwargs": ["limit", "space_id"]},
     "get_task": {"args": ["task_id"]},
     "update_task": {"args": ["task_id"], "kwargs": ["status", "priority"]},
+    # File upload proxy: agents on the Gateway-native path can attach files
+    # to messages without holding the user PAT. Daemon reads the path on
+    # behalf of the agent and uploads via the agent's managed AxClient, so
+    # the upload is correctly attributed to the agent identity. Local-only
+    # by construction (paths are relative to the operator's filesystem).
+    "upload_file": {"args": ["file_path"], "kwargs": ["space_id"]},
 }
 
 

@@ -196,6 +196,7 @@ def test_local_session_send_hydrates_space_from_database(monkeypatch, tmp_path):
             parent_id=None,
             metadata=None,
             message_type="text",
+            attachments=None,
         ):
             sent.update(
                 {
@@ -206,6 +207,7 @@ def test_local_session_send_hydrates_space_from_database(monkeypatch, tmp_path):
                     "parent_id": parent_id,
                     "metadata": metadata,
                     "message_type": message_type,
+                    "attachments": attachments,
                 }
             )
             return {"message": {"id": "msg-1", "space_id": space_id}}
@@ -984,6 +986,7 @@ def test_gateway_local_connect_requests_approval_then_issues_session(monkeypatch
             parent_id=None,
             metadata=None,
             message_type="text",
+            attachments=None,
         ):
             self.sent.append(
                 {
@@ -994,6 +997,7 @@ def test_gateway_local_connect_requests_approval_then_issues_session(monkeypatch
                     "parent_id": parent_id,
                     "metadata": metadata,
                     "message_type": message_type,
+                    "attachments": attachments,
                 }
             )
             return {
@@ -1073,6 +1077,7 @@ def test_gateway_local_connect_requests_approval_then_issues_session(monkeypatch
                 "mentions": ["night_owl"],
             },
             "message_type": "text",
+            "attachments": None,
         }
     ]
 
@@ -4365,6 +4370,48 @@ def test_gateway_agents_attach_writes_channel_config_and_command(monkeypatch, tm
     assert updated["desired_state"] == "running"
 
 
+def test_gateway_agents_mark_attached_makes_manual_session_active(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    token_file = tmp_path / "roger.token"
+    token_file.write_text("axp_a_agent.secret\n")
+    registry = gateway_core.load_gateway_registry()
+    registry["agents"] = [
+        {
+            "name": "roger",
+            "agent_id": "agent-roger",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "claude_code_channel",
+            "template_id": "claude_code_channel",
+            "workdir": str(tmp_path / "roger"),
+            "desired_state": "stopped",
+            "effective_state": "stopped",
+            "transport": "gateway",
+            "credential_source": "gateway",
+            "token_file": str(token_file),
+            "attestation_state": "verified",
+            "approval_state": "approved",
+            "identity_status": "verified",
+            "environment_status": "environment_allowed",
+            "space_status": "active_allowed",
+        }
+    ]
+    gateway_core.save_gateway_registry(registry)
+
+    result = runner.invoke(app, ["gateway", "agents", "mark-attached", "roger", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["desired_state"] == "running"
+    assert payload["effective_state"] == "running"
+    assert payload["manual_attach_state"] == "attached"
+    assert payload["local_attach_state"] == "manual_attached"
+    assert payload["connected"] is True
+    assert payload["presence"] == "IDLE"
+    assert payload["reachability"] == "live_now"
+
+
 def test_gateway_ui_attach_launches_attached_session(monkeypatch, tmp_path):
     config_dir = tmp_path / "config"
     monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
@@ -4444,6 +4491,56 @@ def test_gateway_ui_attach_launches_attached_session(monkeypatch, tmp_path):
             assert payload["launch_mode"] == "test"
             updated = gateway_core.find_agent_entry(gateway_core.load_gateway_registry(), "roger")
             assert updated["desired_state"] == "running"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
+def test_gateway_ui_manual_attach_marks_attached_session_active(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    token_file = tmp_path / "roger.token"
+    token_file.write_text("axp_a_agent.secret\n")
+    registry = gateway_core.load_gateway_registry()
+    registry["agents"] = [
+        {
+            "name": "roger",
+            "agent_id": "agent-roger",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "claude_code_channel",
+            "template_id": "claude_code_channel",
+            "workdir": str(tmp_path / "roger"),
+            "desired_state": "running",
+            "effective_state": "stopped",
+            "transport": "gateway",
+            "credential_source": "gateway",
+            "token_file": str(token_file),
+            "attestation_state": "verified",
+            "approval_state": "approved",
+            "identity_status": "verified",
+            "environment_status": "environment_allowed",
+            "space_status": "active_allowed",
+        }
+    ]
+    gateway_core.save_gateway_registry(registry)
+
+    handler = gateway_cmd._build_gateway_ui_handler(activity_limit=5, refresh_ms=1500)
+    with closing(socket.socket()) as probe:
+        probe.bind(("127.0.0.1", 0))
+        host, port = probe.getsockname()
+    server = gateway_cmd._GatewayUiServer((host, port), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with httpx.Client(base_url=f"http://{host}:{port}", timeout=2.0) as client:
+            marked = client.post("/api/agents/roger/manual-attach", json={"note": "already attached"})
+            assert marked.status_code == 200
+            payload = marked.json()
+            assert payload["manual_attach_state"] == "attached"
+            assert payload["connected"] is True
+            assert payload["reachability"] == "live_now"
     finally:
         server.shutdown()
         server.server_close()
@@ -7056,3 +7153,19 @@ def test_inbox_for_managed_agent_does_not_touch_pending_queue_without_mark_read(
 
     # Queue is preserved.
     assert len(gateway_core.load_agent_pending_messages("cli_god")) == 1
+
+
+
+
+# -- Gateway-native --file (upload + send brokered through the agent identity)
+
+
+def test_local_proxy_allowlist_includes_upload_file():
+    """The /local/proxy method allowlist must expose upload_file so agents
+    on the gateway-native path can attach files to messages without holding
+    the user PAT."""
+    spec = gateway_cmd._LOCAL_PROXY_METHODS.get("upload_file")
+    assert spec is not None, "upload_file should be on the local proxy allowlist"
+    # file_path is positional, space_id is keyword — matches AxClient.upload_file.
+    assert "file_path" in spec.get("args", [])
+    assert "space_id" in spec.get("kwargs", [])
