@@ -695,23 +695,47 @@
 
     function agentTypeMeta(agent, sys) {
       if (sys) return { icon: "system", label: "System", className: "type-inbox" };
-      const publicType = publicAgentTypeMeta(publicAgentTypeLabel(agent));
-      if (publicType) return publicType;
       const template = String(agent.template_id || "").toLowerCase();
       const runtime = String(agent.runtime_type || "").toLowerCase();
       const intake = String(agent.intake_model || "").toLowerCase();
       const mode = String(agent.mode || agent.activation || "").toLowerCase();
-      if (intake === "launch_on_send" || mode.includes("on-demand")) return { icon: "demand", label: "On-Demand Agent", className: "type-demand" };
-      if (intake === "live_listener") return { icon: "channel", label: "Live Listener", className: "type-channel" };
-      if (intake === "polling_mailbox") return { icon: "pass", label: "Pass-through Agent", className: "type-pass" };
-      if (template === "ollama") return { icon: "ollama", label: "Ollama", className: "type-ollama" };
-      if (template === "hermes" || runtime === "hermes_sentinel") return { icon: "hermes", label: "Hermes", className: "type-hermes" };
-      if (template === "pass_through" || agent.local_connection_mode === "pass_through") return { icon: "pass", label: "Pass-through", className: "type-pass" };
-      if (template === "claude_code_channel") return { icon: "channel", label: "Claude Code", className: "type-channel" };
-      if (template === "sentinel_cli") return { icon: "sentinel", label: "Sentinel CLI", className: "type-hermes" };
-      if (template === "echo_test" || runtime === "echo") return { icon: "echo", label: "Echo", className: "type-echo" };
-      if (template === "inbox" || intake === "queue_accept" || runtime === "inbox") return { icon: "inbox", label: "Inbox", className: "type-inbox" };
-      return { icon: "custom", label: templateLabel(agent), className: "type-custom" };
+      const publicLabel = publicAgentTypeLabel(agent);
+
+      // Resolve the specific runtime first (Hermes, Claude Code, Ollama, ...)
+      // so the row shows the actual driver. The public role label
+      // (Live Listener / Pass-through / Inbox / On-Demand) is folded into
+      // the tooltip so operators see both pieces of context at a glance.
+      let resolved = null;
+      if (template === "ollama") resolved = { icon: "ollama", label: "Ollama", className: "type-ollama" };
+      else if (template === "hermes" || runtime === "hermes_sentinel") resolved = { icon: "hermes", label: "Hermes", className: "type-hermes" };
+      else if (template === "claude_code_channel") resolved = { icon: "channel", label: "Claude Code", className: "type-channel" };
+      else if (template === "pass_through" || agent.local_connection_mode === "pass_through") resolved = { icon: "pass", label: "Pass-through", className: "type-pass" };
+      else if (template === "sentinel_cli") resolved = { icon: "sentinel", label: "Sentinel CLI", className: "type-hermes" };
+      else if (template === "echo_test" || runtime === "echo") resolved = { icon: "echo", label: "Echo", className: "type-echo" };
+      else if (template === "inbox" || intake === "queue_accept" || runtime === "inbox") resolved = { icon: "inbox", label: "Inbox", className: "type-inbox" };
+
+      // Fall back to the public role abstraction (Live Listener / etc.)
+      // when we don't have a specific runtime mapped — this is what catches
+      // newer / custom templates the operator hasn't taught the UI about yet.
+      if (!resolved) {
+        const publicType = publicAgentTypeMeta(publicLabel);
+        if (publicType) resolved = publicType;
+      }
+      if (!resolved) {
+        if (intake === "launch_on_send" || mode.includes("on-demand")) resolved = { icon: "demand", label: "On-Demand Agent", className: "type-demand" };
+        else if (intake === "live_listener") resolved = { icon: "channel", label: "Live Listener", className: "type-channel" };
+        else if (intake === "polling_mailbox") resolved = { icon: "pass", label: "Pass-through Agent", className: "type-pass" };
+        else resolved = { icon: "custom", label: templateLabel(agent), className: "type-custom" };
+      }
+
+      // Tooltip carries the runtime + role pair: e.g. "Hermes · Live Listener".
+      // Keeps the row label tight while making the role visible on hover.
+      if (publicLabel && publicLabel.toLowerCase() !== resolved.label.toLowerCase()) {
+        resolved = { ...resolved, tooltip: `${resolved.label} · ${publicLabel}` };
+      } else {
+        resolved = { ...resolved, tooltip: resolved.label };
+      }
+      return resolved;
     }
 
     function looksLikeSpaceId(value) {
@@ -1654,15 +1678,17 @@
       if (nameEl.textContent !== newName) nameEl.textContent = newName;
       const sys = isSystemAgent(agent);
       const type = agentTypeMeta(agent, sys);
+      const tooltip = type.tooltip || type.label;
       typeMarkEl.className = "type-mark " + type.className;
-      typeMarkEl.title = type.label;
-      typeMarkEl.setAttribute("aria-label", type.label);
+      typeMarkEl.title = tooltip;
+      typeMarkEl.setAttribute("aria-label", tooltip);
       if (typeMarkEl.dataset.icon !== type.icon) {
         clearChildren(typeMarkEl);
         typeMarkEl.appendChild(typeIcon(type.icon, type.label));
         typeMarkEl.dataset.icon = type.icon;
       }
       if (typeLabelEl.textContent !== type.label) typeLabelEl.textContent = type.label;
+      if (typeLabelEl.title !== tooltip) typeLabelEl.title = tooltip;
       const activity = lastActivityLabel(agent);
       lastSeenEl.className = "row-last-seen" + (activity.fresh ? " fresh" : "");
       if (lastSeenEl.textContent !== activity.text) lastSeenEl.textContent = activity.text;
