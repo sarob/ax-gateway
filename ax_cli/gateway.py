@@ -1581,9 +1581,17 @@ def apply_entry_current_space(
     if not normalized_space_id:
         return entry
     current_allowed = _space_cache_rows(entry.get("allowed_spaces"))
+    # Resolve the friendly name in this order:
+    #   1. caller-supplied (most authoritative)
+    #   2. agent's own allowed_spaces cache (covers same-space writes)
+    #   3. global on-disk space cache (covers space moves where the new
+    #      space hasn't been added to the agent's allowed_spaces yet)
+    #   4. legacy entry.space_name fallback — deliberately last because it
+    #      can be stale right after a move (the previous space's name).
     normalized_name = (
         str(space_name or "").strip()
         or _space_name_from_cache(current_allowed, normalized_space_id)
+        or space_name_from_cache(normalized_space_id)
         or str(entry.get("space_name") or normalized_space_id)
     )
     rows: list[dict[str, Any]] = [
@@ -2623,14 +2631,22 @@ def annotate_runtime_health(
         local_pid_alive = str(enriched.get("desired_state") or "").lower() == "running" and _pid_is_alive(
             enriched.get("attached_session_pid")
         )
-        if local_pid_alive:
+        manual_attached = (
+            str(enriched.get("desired_state") or "").lower() == "running"
+            and str(enriched.get("manual_attach_state") or "").lower() == "attached"
+        )
+        if local_pid_alive or manual_attached:
             attached_session_alive = True
             if liveness in {"stale", "offline"}:
                 liveness = "connected"
                 connected = True
                 state = "running"
-            enriched["local_attach_state"] = "connected"
-            enriched["local_attach_detail"] = "Gateway-managed Claude Code session is running locally."
+            if manual_attached and not local_pid_alive:
+                enriched["local_attach_state"] = "manual_attached"
+                enriched["local_attach_detail"] = "Operator marked this Claude Code session as manually attached."
+            else:
+                enriched["local_attach_state"] = "connected"
+                enriched["local_attach_detail"] = "Gateway-managed Claude Code session is running locally."
         elif str(enriched.get("local_attach_state") or "").lower() == "connected":
             enriched["local_attach_state"] = "stopped"
             enriched["local_attach_detail"] = "Claude Code is not running locally."
@@ -3085,6 +3101,10 @@ _LOAD_SNAPSHOT_KEY = "_load_snapshot"
 # writer changed it and we must take disk's value, not memory's stale view.
 _OPERATOR_AUTHORITATIVE_FIELDS = (
     "desired_state",
+    "manual_attach_state",
+    "manual_attached_at",
+    "manual_attach_note",
+    "manual_attach_source",
     "lifecycle_phase",
     "archived_at",
     "archived_reason",

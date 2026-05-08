@@ -1565,9 +1565,48 @@ def _set_managed_agent_desired_state(name: str, desired_state: str) -> dict:
     if not entry:
         raise LookupError(f"Managed agent not found: {name}")
     entry["desired_state"] = desired_state
+    if desired_state == "stopped":
+        entry.pop("manual_attach_state", None)
+        entry.pop("manual_attached_at", None)
+        entry.pop("manual_attach_note", None)
+        entry.pop("manual_attach_source", None)
+        if str(entry.get("local_attach_state") or "").lower() == "manual_attached":
+            entry["local_attach_state"] = "stopped"
+            entry["local_attach_detail"] = "Claude Code is not running locally."
     save_gateway_registry(registry)
     event = "managed_agent_desired_running" if desired_state == "running" else "managed_agent_desired_stopped"
     record_gateway_activity(event, entry=entry)
+    return annotate_runtime_health(entry, registry=registry)
+
+
+def _mark_attached_agent_session(name: str, *, note: str | None = None) -> dict:
+    registry = load_gateway_registry()
+    entry = find_agent_entry(registry, name)
+    if not entry:
+        raise LookupError(f"Managed agent not found: {name}")
+    profile = gateway_core.infer_operator_profile(entry)
+    if profile["placement"] != "attached" or profile["activation"] != "attach_only":
+        raise ValueError(f"@{name} is not an attached-session agent.")
+    now = datetime.now(timezone.utc).isoformat()
+    entry["desired_state"] = "running"
+    entry["effective_state"] = "running"
+    entry["manual_attach_state"] = "attached"
+    entry["manual_attached_at"] = now
+    entry["manual_attach_source"] = "operator"
+    if note is not None:
+        entry["manual_attach_note"] = str(note).strip()
+    entry["current_status"] = "idle"
+    entry["current_activity"] = "Manually attached"
+    entry["local_attach_state"] = "manual_attached"
+    entry["local_attach_detail"] = "Operator marked this Claude Code session as manually attached."
+    entry["last_connected_at"] = now
+    entry["last_seen_at"] = now
+    save_gateway_registry(registry)
+    record_gateway_activity(
+        "manual_attach_confirmed",
+        entry=entry,
+        activity_message=str(note or "Operator marked attached session as active."),
+    )
     return annotate_runtime_health(entry, registry=registry)
 
 
@@ -2122,12 +2161,32 @@ def _inbox_for_managed_agent(
         mark_read=mark_read,
     )
     messages = data if isinstance(data, list) else data.get("messages", [])
+    # Mirror `_local_session_inbox`: when the operator explicitly marks read,
+    # the local pending queue (which powers `backlog_depth` and the UI badge)
+    # must also be cleared. Without this, the upstream returns
+    # `marked_read_count=N` but the side app keeps showing N unread because
+    # `backlog_depth` is read straight off the queue file.
+    local_marked_read_count = 0
+    if mark_read:
+        agent_name = str(entry.get("name") or name)
+        pending_items = load_agent_pending_messages(agent_name)
+        local_marked_read_count = len(pending_items)
+        save_agent_pending_messages(agent_name, [])
+        registry_after = load_gateway_registry()
+        stored = find_agent_entry(registry_after, agent_name)
+        if stored is not None:
+            stored["backlog_depth"] = 0
+            stored["queue_depth"] = 0
+            stored["current_status"] = None
+            stored["current_activity"] = None
+            save_gateway_registry(registry_after)
     record_gateway_activity(
         "managed_inbox_polled",
         entry=entry,
         message_count=len(messages),
         mark_read=mark_read,
         space_id=selected_space,
+        local_marked_read_count=local_marked_read_count,
     )
     return {
         "agent": entry.get("name"),
@@ -2136,6 +2195,7 @@ def _inbox_for_managed_agent(
         "messages": messages,
         "unread_count": data.get("unread_count") if isinstance(data, dict) else None,
         "marked_read_count": data.get("marked_read_count") if isinstance(data, dict) else None,
+        "local_marked_read_count": local_marked_read_count if mark_read else None,
     }
 
 
@@ -5509,6 +5569,18 @@ def _build_gateway_ui_handler(*, activity_limit: int, refresh_ms: int):
                     )
                     _write_json_response(self, payload, status=HTTPStatus.ACCEPTED)
                     return
+                if parsed.path.endswith("/manual-attach") and parsed.path.startswith("/api/agents/"):
+                    name = unquote(parsed.path.removeprefix("/api/agents/").removesuffix("/manual-attach")).strip()
+                    try:
+                        payload = _mark_attached_agent_session(
+                            name,
+                            note=str(body.get("note") or "").strip() or None,
+                        )
+                    except (LookupError, ValueError) as exc:
+                        _write_json_response(self, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                        return
+                    _write_json_response(self, payload)
+                    return
                 if parsed.path.endswith("/send") and parsed.path.startswith("/api/agents/"):
                     name = unquote(parsed.path.removeprefix("/api/agents/").removesuffix("/send")).strip()
                     payload = _send_from_managed_agent(
@@ -7732,6 +7804,25 @@ def start_agent(name: str = typer.Argument(..., help="Managed agent name")):
         err_console.print(f"[red]Managed agent not found:[/red] {name}")
         raise typer.Exit(1)
     err_console.print(f"[green]Desired state set to running:[/green] @{name}")
+
+
+@agents_app.command("mark-attached")
+def mark_attached_agent(
+    name: str = typer.Argument(..., help="Attached-session agent name"),
+    note: str = typer.Option(None, "--note", help="Optional operator note for the manual attach assertion"),
+    as_json: bool = JSON_OPTION,
+):
+    """Mark an attached-session agent as manually attached and active."""
+    try:
+        payload = _mark_attached_agent_session(name, note=note)
+    except (LookupError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    if as_json:
+        print_json(payload)
+        return
+    err_console.print(f"[green]Marked manually attached:[/green] @{name}")
+    err_console.print("  state = active")
 
 
 def _attach_command_for_payload(payload: dict) -> str:

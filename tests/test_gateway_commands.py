@@ -6967,3 +6967,92 @@ def test_runtime_reconcile_skips_phantom_rebinding_after_corruption_repair(monke
         "was a non-UUID -> UUID space_id repair"
     )
     assert runtime.entry["space_id"] == _GOOD_SPACE_UUID
+
+
+# -- Active-space cross-space-move bugfixes ----------------------------------
+
+
+def test_apply_entry_current_space_uses_global_cache_for_unknown_new_space(monkeypatch, tmp_path):
+    """When an agent moves to a space that's NOT in its existing
+    allowed_spaces, apply_entry_current_space must consult the global on-disk
+    space cache before falling back to the (stale) entry.space_name. Without
+    this, active_space_name keeps showing the previous space's name even
+    after the id has updated — exactly the gbr-coordinator split-brain
+    Jacob hit during the move from GBR to madtank's Workspace.
+    """
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    new_space = "78950af5-4d27-441b-9296-ec46de8ba35d"
+    gateway_core.save_space_cache([
+        {"id": _GOOD_SPACE_UUID, "name": "madtank's Workspace", "slug": "madtank"},
+        {"id": new_space, "name": "Claude Code Workshop", "slug": "claude-code-workshop"},
+    ])
+    entry = {
+        "name": "agent-x",
+        "space_id": _GOOD_SPACE_UUID,
+        "active_space_id": _GOOD_SPACE_UUID,
+        "active_space_name": "madtank's Workspace",
+        "default_space_id": _GOOD_SPACE_UUID,
+        "default_space_name": "madtank's Workspace",
+        "space_name": "madtank's Workspace",  # legacy field, the prior space
+        "allowed_spaces": [
+            {"space_id": _GOOD_SPACE_UUID, "name": "madtank's Workspace", "is_default": True},
+        ],
+    }
+
+    gateway_core.apply_entry_current_space(entry, new_space)
+
+    # Name must come from the global cache, not the stale entry.space_name.
+    assert entry["active_space_id"] == new_space
+    assert entry["active_space_name"] == "Claude Code Workshop"
+    assert entry["default_space_id"] == new_space
+    assert entry["default_space_name"] == "Claude Code Workshop"
+
+
+def test_inbox_for_managed_agent_clears_pending_queue_on_mark_read(monkeypatch, tmp_path):
+    """`ax gateway agents inbox <name> --mark-read` must clear the local
+    pending queue so backlog_depth/queue_depth go to 0. Without this fix
+    the side-app badge stuck at the old count even though the upstream
+    confirmed the messages were marked read — the gbr-coordinator report.
+    """
+    _seed_managed_inbox_agent(tmp_path, monkeypatch)
+    gateway_core.save_agent_pending_messages(
+        "cli_god",
+        [
+            {"message_id": "m-1", "content": "first", "queued_at": "2026-05-08T00:00:00Z"},
+            {"message_id": "m-2", "content": "second", "queued_at": "2026-05-08T00:01:00Z"},
+            {"message_id": "m-3", "content": "third", "queued_at": "2026-05-08T00:02:00Z"},
+        ],
+    )
+    monkeypatch.setattr(gateway_cmd, "AxClient", _FakeManagedSendClient)
+
+    payload = gateway_cmd._inbox_for_managed_agent(name="cli_god", limit=10, mark_read=True)
+
+    # Endpoint reports how many local items it cleared.
+    assert payload["local_marked_read_count"] == 3
+    # On-disk queue is empty.
+    assert gateway_core.load_agent_pending_messages("cli_god") == []
+    # Registry-side counters reflect the cleared state — that's what the
+    # UI badge actually reads.
+    registry_after = gateway_core.load_gateway_registry()
+    stored = gateway_cmd.find_agent_entry(registry_after, "cli_god")
+    assert stored["backlog_depth"] == 0
+    assert stored["queue_depth"] == 0
+    assert stored["current_status"] is None
+
+
+def test_inbox_for_managed_agent_does_not_touch_pending_queue_without_mark_read(monkeypatch, tmp_path):
+    """Plain peek (`mark_read=False`) must NOT clear the queue — operators
+    inspecting on the agent's behalf shouldn't silently drain the agent's
+    work."""
+    _seed_managed_inbox_agent(tmp_path, monkeypatch)
+    gateway_core.save_agent_pending_messages(
+        "cli_god",
+        [{"message_id": "m-1", "content": "first", "queued_at": "2026-05-08T00:00:00Z"}],
+    )
+    monkeypatch.setattr(gateway_cmd, "AxClient", _FakeManagedSendClient)
+
+    gateway_cmd._inbox_for_managed_agent(name="cli_god", limit=10, mark_read=False)
+
+    # Queue is preserved.
+    assert len(gateway_core.load_agent_pending_messages("cli_god")) == 1
