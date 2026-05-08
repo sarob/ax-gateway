@@ -2168,6 +2168,19 @@ def _inbox_for_managed_agent(
     if not selected_space:
         raise ValueError(f"Managed agent is missing a space id: @{name}")
     client = _load_managed_agent_client(entry)
+    # Capture the local pending queue first — it's the Gateway's view of
+    # "messages addressed to this agent that haven't been picked up yet".
+    # The drawer's "X unread messages" badge counts these. Use it to filter
+    # the upstream listing when unread_only=True so the drawer's body matches
+    # its own header (without this, upstream returns ALL messages and the
+    # drawer says "3 unread" while showing 20).
+    agent_name = str(entry.get("name") or name)
+    pending_items_for_filter = load_agent_pending_messages(agent_name)
+    pending_ids = {
+        str(item.get("message_id") or item.get("id") or "").strip()
+        for item in pending_items_for_filter
+        if str(item.get("message_id") or item.get("id") or "").strip()
+    }
     data = client.list_messages(
         limit=limit,
         channel=channel,
@@ -2177,6 +2190,15 @@ def _inbox_for_managed_agent(
         mark_read=mark_read,
     )
     messages = data if isinstance(data, list) else data.get("messages", [])
+    if unread_only:
+        if pending_ids:
+            messages = [
+                msg
+                for msg in messages
+                if str(msg.get("id") or msg.get("message_id") or "").strip() in pending_ids
+            ]
+        else:
+            messages = []
     # Mirror `_local_session_inbox`: when the operator explicitly marks read,
     # the local pending queue (which powers `backlog_depth` and the UI badge)
     # must also be cleared. Without this, the upstream returns
@@ -2184,9 +2206,7 @@ def _inbox_for_managed_agent(
     # `backlog_depth` is read straight off the queue file.
     local_marked_read_count = 0
     if mark_read:
-        agent_name = str(entry.get("name") or name)
-        pending_items = load_agent_pending_messages(agent_name)
-        local_marked_read_count = len(pending_items)
+        local_marked_read_count = len(pending_items_for_filter)
         save_agent_pending_messages(agent_name, [])
         registry_after = load_gateway_registry()
         stored = find_agent_entry(registry_after, agent_name)
@@ -2209,7 +2229,12 @@ def _inbox_for_managed_agent(
         "agent_id": entry.get("agent_id"),
         "space_id": selected_space,
         "messages": messages,
-        "unread_count": data.get("unread_count") if isinstance(data, dict) else None,
+        # When unread_only=True, the count returned reflects the pending
+        # queue intersection (what the drawer actually shows), not the
+        # upstream's idea of unread. Operators see one consistent number.
+        "unread_count": (
+            len(messages) if unread_only else (data.get("unread_count") if isinstance(data, dict) else None)
+        ),
         "marked_read_count": data.get("marked_read_count") if isinstance(data, dict) else None,
         "local_marked_read_count": local_marked_read_count if mark_read else None,
     }

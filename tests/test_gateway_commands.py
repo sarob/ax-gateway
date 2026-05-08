@@ -7157,6 +7157,48 @@ def test_inbox_for_managed_agent_does_not_touch_pending_queue_without_mark_read(
 
 
 
+def test_inbox_for_managed_agent_unread_only_intersects_pending_queue(monkeypatch, tmp_path):
+    """The drawer's `unread_only=true` request must filter the upstream
+    listing to messages the local pending queue tracks. Without this, the
+    upstream returns every message in the agent's view (20 by default) and
+    the drawer shows "3 unread messages" header above a 20-row body —
+    exactly the misalignment Jacob hit on gbr-coordinator."""
+    _seed_managed_inbox_agent(tmp_path, monkeypatch)
+    # Pending queue has only msg-1 — that's "unread" by Gateway's definition.
+    gateway_core.save_agent_pending_messages(
+        "cli_god",
+        [{"message_id": "msg-1", "content": "queued", "queued_at": "2026-05-08T00:00:00Z"}],
+    )
+
+    class FakeUpstreamClient:
+        def list_messages(self, *, limit, channel, space_id, agent_id, unread_only, mark_read):
+            # Upstream returns ALL recent messages — the filter must happen
+            # on our side using the pending queue.
+            return {
+                "messages": [
+                    {"id": "msg-1", "content": "queued"},
+                    {"id": "msg-2", "content": "already-read"},
+                    {"id": "msg-3", "content": "even-older"},
+                ],
+                "unread_count": 0,
+            }
+
+    class _FactoryClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __getattr__(self, attr):
+            return getattr(FakeUpstreamClient(), attr)
+
+    monkeypatch.setattr(gateway_cmd, "AxClient", _FactoryClient)
+
+    payload = gateway_cmd._inbox_for_managed_agent(name="cli_god", limit=10, unread_only=True)
+
+    # Body must match header: only the messages in the pending queue.
+    assert [m["id"] for m in payload["messages"]] == ["msg-1"]
+    assert payload["unread_count"] == 1
+
+
 # -- Gateway-native --file (upload + send brokered through the agent identity)
 
 
