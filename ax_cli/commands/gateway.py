@@ -701,6 +701,15 @@ def _proxy_local_session_call(*, session_token: str, body: dict) -> dict:
         if key in args_in and args_in[key] is not None:
             keyword[key] = args_in[key]
 
+    if method == "upload_file":
+        workdir = str(entry.get("workdir") or "").strip()
+        if not workdir:
+            raise ValueError("upload_file requires the agent to have a workdir configured")
+        file_path = Path(positional[0]).resolve()
+        workdir_path = Path(workdir).resolve()
+        if not str(file_path).startswith(str(workdir_path) + os.sep) and file_path != workdir_path:
+            raise ValueError(f"upload_file path {file_path} is outside the agent workdir {workdir_path}")
+
     client = _load_managed_agent_client(entry)
     method_fn = getattr(client, method, None)
     if not callable(method_fn):
@@ -2193,9 +2202,7 @@ def _inbox_for_managed_agent(
     if unread_only:
         if pending_ids:
             messages = [
-                msg
-                for msg in messages
-                if str(msg.get("id") or msg.get("message_id") or "").strip() in pending_ids
+                msg for msg in messages if str(msg.get("id") or msg.get("message_id") or "").strip() in pending_ids
             ]
         else:
             messages = []

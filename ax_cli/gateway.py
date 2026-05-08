@@ -1560,12 +1560,18 @@ def _space_cache_rows(value: object) -> list[dict[str, Any]]:
     return rows
 
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
 def _space_name_from_cache(allowed_spaces: list[dict[str, Any]], space_id: str | None) -> str | None:
     if not space_id:
         return None
     for item in allowed_spaces:
         if str(item.get("space_id") or "") == str(space_id):
-            return str(item.get("name") or space_id)
+            name = str(item.get("name") or "").strip()
+            if name and not _UUID_RE.match(name):
+                return name
+            return None
     return None
 
 
@@ -1910,11 +1916,15 @@ def ensure_gateway_identity_binding(
         ).strip()
         or None
     )
-    default_space_name = _space_name_from_cache(allowed_spaces, default_space_id) or str(
-        entry.get("default_space_name") or entry.get("space_name") or default_space_id or ""
+    default_space_name = (
+        _space_name_from_cache(allowed_spaces, default_space_id)
+        or space_name_from_cache(default_space_id)
+        or str(entry.get("default_space_name") or entry.get("space_name") or default_space_id or "")
     )
-    active_space_name = _space_name_from_cache(allowed_spaces, active_space_id) or str(
-        entry.get("active_space_name") or entry.get("space_name") or active_space_id or ""
+    active_space_name = (
+        _space_name_from_cache(allowed_spaces, active_space_id)
+        or space_name_from_cache(active_space_id)
+        or str(entry.get("active_space_name") or entry.get("space_name") or active_space_id or "")
     )
     binding = {
         "identity_binding_id": str((existing or {}).get("identity_binding_id") or f"idbind_{str(uuid.uuid4())}"),
@@ -2052,6 +2062,7 @@ def evaluate_identity_space_binding(
         str(
             (binding or {}).get("default_space_name")
             or _space_name_from_cache(allowed_spaces, default_space_id)
+            or space_name_from_cache(default_space_id)
             or default_space_id
             or ""
         ).strip()
@@ -2059,6 +2070,7 @@ def evaluate_identity_space_binding(
     )
     active_space_name = (
         _space_name_from_cache(allowed_spaces, active_space_id)
+        or space_name_from_cache(active_space_id)
         or str((binding or {}).get("active_space_name") or active_space_id or "").strip()
         or None
     )

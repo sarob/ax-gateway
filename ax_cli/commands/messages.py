@@ -872,9 +872,7 @@ def send(
                 raise typer.Exit(1) from exc
             raw_attachment = upload_data.get("attachment", upload_data) if isinstance(upload_data, dict) else {}
             attachment_id = (
-                raw_attachment.get("id")
-                or raw_attachment.get("attachment_id")
-                or raw_attachment.get("file_id")
+                raw_attachment.get("id") or raw_attachment.get("attachment_id") or raw_attachment.get("file_id")
             )
             if not attachment_id:
                 typer.echo(f"Error: upload of {local_path.name} did not return an attachment id.", err=True)
@@ -884,7 +882,9 @@ def send(
                     attachment_id=str(attachment_id),
                     content_type=str(raw_attachment.get("content_type") or "application/octet-stream"),
                     filename=str(raw_attachment.get("filename") or local_path.name),
-                    size=int(raw_attachment.get("size") or raw_attachment.get("size_bytes") or local_path.stat().st_size),
+                    size=int(
+                        raw_attachment.get("size") or raw_attachment.get("size_bytes") or local_path.stat().st_size
+                    ),
                     url=str(raw_attachment.get("url") or ""),
                     context_key=str(raw_attachment.get("context_key") or "") or None,
                 )
