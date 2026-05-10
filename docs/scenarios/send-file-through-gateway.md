@@ -48,16 +48,16 @@ The message should appear with a file attachment reference.
 
 | Problem | Cause | Fix |
 | --- | --- | --- |
-| `upload_file` rejected by proxy | `upload_file` is not in `_LOCAL_PROXY_METHODS` — it goes through a dedicated endpoint, not the generic proxy | Use the `--file` flag on `ax send` which routes through the correct endpoint |
-| "Method not on Gateway proxy allowlist" | Trying to call `upload_file` via `/local/proxy` directly | This is by design — `upload_file` without path restriction is a trust boundary violation for inbox agents. Use the dedicated send endpoint |
+| `upload_file` rejected by proxy | Agent doesn't have admin tier access — `upload_file` requires `tier: "admin"` in `_LOCAL_PROXY_METHODS` | Verify the agent's tier level; admin-tier proxy calls may require operator approval |
+| Upload path rejected | File path is outside the agent's configured workdir | Move the file into the agent's workdir, or update the agent's `--workdir` config |
 | Large file timeout | File exceeds the default timeout | Check if `--timeout` flag is available, or upload separately and reference by ID |
 
 ## Learning goal
 
-Understanding the trust boundary around file upload. `upload_file` is
-intentionally excluded from the generic proxy allowlist (`_LOCAL_PROXY_METHODS`)
-because granting it to all agents — including untrusted inbox agents — would
-let any local agent write arbitrary files through the operator's credentials.
-Trusted send operations go through the dedicated `/local/send` endpoint with
-additional validation. See [ADR-002](../adr/ADR-002-flat-proxy-allowlist.md)
+Understanding the trust boundary around file upload. `upload_file` is in the
+proxy allowlist (`_LOCAL_PROXY_METHODS` at `commands/gateway.py:803`) but
+restricted to the `admin` tier and sandboxed to the agent's workdir (lines
+833–840). This prevents untrusted agents from writing arbitrary files through
+the operator's credentials while allowing trusted agents to upload from their
+own workspace. See [ADR-002](../adr/ADR-002-flat-proxy-allowlist.md)
 and [Agent Authentication — Trust Boundary](../agent-authentication.md#trust-boundary-model).

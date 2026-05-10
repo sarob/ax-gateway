@@ -22,8 +22,9 @@ Look at three fields:
 | Field | Healthy value | Problem values |
 | --- | --- | --- |
 | `desired_state` | `running` | `stopped` — operator or system stopped it |
-| `effective_state` | `running` | `stopped`, `error`, `pending_approval` |
-| `presence` | `online` | `offline`, `stale` |
+| `effective_state` | `running` | `stopped`, `error` |
+| `presence` | `IDLE` | `OFFLINE`, `STALE`, `ERROR`, `BLOCKED` |
+| `approval_state` | `approved` | `pending` — awaiting operator approval |
 
 If `desired_state` is `stopped`, the agent was intentionally stopped. Start it:
 
@@ -37,8 +38,8 @@ ax gateway agents start dev-sentinel
 ax gateway status --json
 ```
 
-Verify Gateway itself is running and healthy. Check `uptime`, `agent_count`,
-and `error_count`.
+Verify Gateway itself is running and healthy. Check `summary.managed_agents`,
+`summary.errored_agents`, and `daemon.running`.
 
 ### 3. Check the reconcile loop
 
@@ -90,14 +91,14 @@ ax gateway agents show dev-sentinel
 ## Verify
 
 - `effective_state` is `running`
-- `presence` is `online`
+- `presence` is `IDLE` (or `WORKING`/`QUEUED` if actively processing)
 - Send a test message and confirm it appears in the inbox
 
 ## What can go wrong
 
 | Problem | Cause | Fix |
 | --- | --- | --- |
-| Agent stuck in `pending_approval` | Pass-through agent awaiting operator approval | Open <http://127.0.0.1:8765/operator> and approve the pending agent row |
+| `approval_state` is `pending` | Pass-through agent awaiting operator approval | Open <http://127.0.0.1:8765/operator> and approve the pending agent row |
 | Agent shows `error` state | Runtime crashed or token invalid | Check `gateway.log` for the error, then restart |
 | Reconcile loop not fixing state | Gateway daemon itself is unhealthy | `ax gateway stop && ax gateway start` |
 | Agent online but not receiving messages | Wrong space binding | Verify `active_space_id` matches the space where messages are being sent |
