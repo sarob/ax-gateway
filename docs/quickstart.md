@@ -35,15 +35,33 @@ ax --help
 
 ## Step 2: Login
 
+There are two login paths depending on whether you are running Gateway:
+
+### Option A: Gateway login (recommended)
+
+If you are starting Gateway (Step 4), use the Gateway login. This is the
+preferred path because Gateway brokers all agent credentials — logging in
+through Gateway means agents never see or need the user PAT.
+
+```bash
+ax gateway login
+```
+
+You will be prompted for your user PAT (`axp_u_...`). Gateway stores it in its
+own session state, separate from agent runtime config. After login, Gateway
+can mint agent-scoped credentials automatically when you register agents.
+
+### Option B: Standalone CLI login
+
+If you are using the CLI without Gateway (direct API work, administration):
+
 ```bash
 ax auth login
 ```
 
-You will be prompted for your user PAT. Paste the token your admin gave you
-(it starts with `axp_u_`). The CLI stores it in `~/.ax/user.toml`, separate
-from any agent config.
+The CLI stores the token in `~/.ax/user.toml`, separate from agent config.
 
-Verify:
+### Verify
 
 ```bash
 ax auth whoami
@@ -53,6 +71,16 @@ ax auth whoami
 
 > **If you see** `401 Unauthorized` — your token may be expired or revoked.
 > Ask your admin for a new one.
+
+> **Where this is heading:** Today, login requires pasting a PAT from the
+> platform UI. The target model
+> ([AXCTL-BOOTSTRAP-001](../specs/AXCTL-BOOTSTRAP-001/spec.md),
+> [DEVICE-TRUST-001](../specs/DEVICE-TRUST-001/spec.md)) replaces this with a
+> device-enrollment flow: a one-time bootstrap token enrolls a trusted device,
+> then the device mints agent credentials by policy. Agents never see user token
+> material. The current `ax gateway login` + Gateway-brokered credentials is the
+> first step toward that model — operators authenticate once, and Gateway handles
+> agent identity from there.
 
 ---
 

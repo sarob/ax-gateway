@@ -189,6 +189,56 @@ proxy dispatcher, and UI HTML. They work as a pair — see the
 
 > **Note:** Step 3 (join a space) is simplified pending issue #176 resolution. The quickstart assumes the operator already has space membership.
 
+### Authentication onboarding trajectory
+
+The quickstart teaches three authentication stages. Interns should understand
+all three — today's operators use Stage 1, the codebase is at Stage 2, and the
+specs describe Stage 3.
+
+**Stage 1 — Manual PAT paste (current minimum path)**
+
+The operator creates a user PAT in the platform UI and pastes it into
+`ax auth login`. This works for standalone CLI use and is the simplest path
+for new operators who don't need Gateway.
+
+**Stage 2 — Gateway-brokered credentials (current recommended path)**
+
+`ax gateway login` authenticates the operator once through Gateway. After that,
+Gateway mints agent-scoped PATs automatically when agents are registered
+(`ax gateway agents add`). Agents never see the user PAT — they get their own
+managed credential stored at `~/.ax/gateway/agents/<name>/token`. This is the
+model the quickstart recommends and the model all scenario guides assume.
+
+The key teaching point: the user PAT is a **setup credential**, not a runtime
+credential. It authenticates the operator to Gateway; Gateway authenticates
+agents to the platform. This separation is why
+[ADR-005](adr/ADR-005-credentials-never-in-workspace.md) prohibits agent
+credentials in workspace config files.
+
+**Stage 3 — Device enrollment and OAuth (future direction)**
+
+The target model described in
+[AXCTL-BOOTSTRAP-001](../specs/AXCTL-BOOTSTRAP-001/spec.md) and
+[DEVICE-TRUST-001](../specs/DEVICE-TRUST-001/spec.md) replaces the manual PAT
+paste with a device-enrollment flow:
+
+1. The operator creates a one-time bootstrap token in the platform UI.
+2. A device-enrollment command consumes that token, generates a local device
+   keypair, and registers the public key with the platform.
+3. The raw bootstrap token is discarded — it is never stored or reusable.
+4. The enrolled device uses its device credential to mint agent PATs by policy.
+5. Agents use agent-scoped PATs to exchange for short-lived JWTs.
+
+The OAuth/device-code variant would replace steps 1-2 with a browser-based
+authorization flow (device code grant), removing the manual token copy entirely.
+The operator runs a command, a browser tab opens for authorization, and the CLI
+receives a device credential on success.
+
+No arrow points from agent back to raw user token material — that is the core
+invariant across all three stages. Stage 2 enforces it by convention (Gateway
+doesn't expose the user PAT to agents). Stage 3 enforces it structurally (the
+bootstrap token is consumed and discarded during enrollment).
+
 ---
 
 ## 4. Scenario / Task Pages
