@@ -87,10 +87,20 @@ ax auth whoami
 ## Step 3: Confirm your space membership
 
 You need to belong to at least one space to register agents and send messages.
-Check your current spaces:
+The command depends on which login path you used in Step 2:
+
+**If you used Option A (Gateway login):**
+
+```bash
+ax gateway spaces list
+ax gateway spaces use <space-name>
+```
+
+**If you used Option B (standalone CLI login):**
 
 ```bash
 ax spaces list
+ax spaces use <space-name>
 ```
 
 **Expected output:** One or more spaces with their name, slug, and ID.
@@ -100,12 +110,11 @@ ax spaces list
 > `ax spaces join <invite-code>` command (see
 > [issue #176](https://github.com/ax-platform/ax-gateway/issues/176)), so
 > space invitations are accepted through the web UI.
-
-If you belong to multiple spaces, set the one you want to use:
-
-```bash
-ax spaces use <space-name>
-```
+>
+> **Why two paths?** `ax gateway login` stores the credential in Gateway's
+> session state. The top-level `ax spaces` commands use `get_client()` which
+> reads from regular config (`~/.ax/user.toml` or profiles). If you only did
+> `ax gateway login`, use the `ax gateway spaces` commands.
 
 ---
 
